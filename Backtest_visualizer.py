@@ -245,6 +245,7 @@ if "lang"      not in st.session_state: st.session_state.lang = "en"
 if "plan"      not in st.session_state: st.session_state.plan = "free"
 if "runs_left" not in st.session_state: st.session_state.runs_left = 3
 if "bt_result" not in st.session_state: st.session_state.bt_result = None
+if "market"    not in st.session_state: st.session_state.market = "spot"
 
 lang = st.session_state.lang
 t    = TEXTS[lang]
@@ -320,6 +321,22 @@ with st.sidebar:
     else:
         candles = st.slider(t["candles"], min_value=30, max_value=200, value=100, step=10)
 
+    # Market type
+    if plan == "free":
+        st.session_state.market = "spot"
+        st.markdown(
+            '<span style="font-family:JetBrains Mono,monospace;font-size:0.75rem;color:#4a6080;">'
+            'Market: <b style="color:#00d4ff;">Spot</b> (Free fixed)</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        market_choice = st.selectbox(
+            "Market",
+            ["Spot (현물)", "Futures (선물)"],
+            index=1 if st.session_state.market == "futures" else 0,
+        )
+        st.session_state.market = "futures" if "Futures" in market_choice else "spot"
+
     st.divider()
 
     # Code input
@@ -354,6 +371,22 @@ with st.sidebar:
 # ── Main ──────────────────────────────────────────────────────
 st.markdown(f"## {t['title']}")
 st.markdown(f'<p style="color:#4a6080;font-family:JetBrains Mono,monospace;font-size:0.8rem;">{t["subtitle"]}</p>', unsafe_allow_html=True)
+
+disclaimer = (
+    "⚠️ **Disclaimer**: This tool is for educational and informational purposes only. "
+    "Backtest results are based on historical data and do not guarantee future performance. "
+    "This is not financial advice. All trading decisions are solely your responsibility."
+    if lang == "en" else
+    "⚠️ **면책 공고**: 본 툴은 교육 및 정보 제공 목적으로만 제공됩니다. "
+    "백테스트 결과는 과거 데이터 기반이며 미래 수익을 보장하지 않습니다. "
+    "본 툴은 투자 권유가 아니며, 모든 투자 결정의 책임은 사용자 본인에게 있습니다."
+)
+st.markdown(
+    f'<div style="background:#1a0d00;border:1px solid #92400e;border-radius:8px;'
+    f'padding:10px 14px;font-family:JetBrains Mono,monospace;font-size:0.72rem;'
+    f'color:#d97706;line-height:1.6;">{disclaimer}</div>',
+    unsafe_allow_html=True,
+)
 st.divider()
 
 # ── Strategy input (메인 화면) ────────────────────────────────
@@ -371,12 +404,27 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+max_chars = 100 if plan == "free" else 500
+
 strategy_text = st.text_area(
     label="strategy_input",
     placeholder=TEXTS[st.session_state.lang]["strategy_placeholder"],
     height=130,
     label_visibility="collapsed",
     key="strategy_input_main",
+    max_chars=max_chars,
+)
+
+# 글자수 카운터
+cur_len = len(strategy_text)
+char_color = "#ef4444" if cur_len >= max_chars else "#4a6080"
+st.markdown(
+    f'<div style="text-align:right;font-family:JetBrains Mono,monospace;'
+    f'font-size:0.7rem;color:{char_color};">'
+    f'{cur_len} / {max_chars}'
+    + (" — <b>Upgrade to Pro for 500 chars</b>" if plan == "free" and cur_len >= 90 else "")
+    + '</div>',
+    unsafe_allow_html=True,
 )
 
 # RUN 버튼 — 크고 명확하게
@@ -389,8 +437,11 @@ run_clicked = st.button(
 st.divider()
 
 # ── Backtest engine ───────────────────────────────────────────
-def fetch_binance_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
-    url = "https://api.binance.us/api/v3/klines"
+SPOT_URL    = "https://api.binance.us/api/v3/klines"
+FUTURES_URL = "https://fapi.binance.com/fapi/v1/klines"
+
+def fetch_binance_klines(symbol: str, interval: str, limit: int, market: str = "spot") -> pd.DataFrame:
+    url = FUTURES_URL if market == "futures" else SPOT_URL
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
@@ -631,7 +682,7 @@ if run_clicked:
     else:
         with st.spinner(t["fetching"]):
             try:
-                df_raw = fetch_binance_klines(symbol, tf, candles)
+                df_raw = fetch_binance_klines(symbol, tf, candles, market=st.session_state.market)
             except Exception as e:
                 st.error(f"Binance API error: {e}")
                 st.stop()
