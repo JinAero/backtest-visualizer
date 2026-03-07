@@ -413,6 +413,22 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# 초기자본 + 수수료
+col_eq, col_fee = st.columns(2)
+with col_eq:
+    initial_equity = st.number_input(
+        "💰 " + ("Initial Capital (USDT)" if lang == "en" else "초기 자본 (USDT)"),
+        min_value=10.0, max_value=100000.0, value=1000.0, step=100.0,
+        format="%.1f",
+    )
+with col_fee:
+    fee_pct = st.number_input(
+        "💸 " + ("Fee per trade (%)" if lang == "en" else "거래 수수료 (%)"),
+        min_value=0.0, max_value=1.0, value=0.04, step=0.01,
+        format="%.3f",
+        help="Binance Futures taker fee: 0.04% / Spot: 0.1%",
+    )
+
 # RUN 버튼 — 크고 명확하게
 st.markdown("<br>", unsafe_allow_html=True)
 run_clicked = st.button(
@@ -518,7 +534,8 @@ Return ONLY the JSON, no explanation, no markdown."""
                 "use_ema_filter": False, "ema_period": 200}
 
 
-def run_backtest(df: pd.DataFrame, indicator: str, params: dict, initial_equity=30.0) -> dict:
+def run_backtest(df: pd.DataFrame, indicator: str, params: dict,
+                 initial_equity=1000.0, fee_pct=0.0004) -> dict:
     df = df.copy().reset_index(drop=True)
 
     # Calculate indicators
@@ -618,8 +635,9 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict, initial_equity=
                         exit_reason = "SIGNAL"
 
             if exit_signal:
-                pnl = (price - entry_price) * qty
-                hold = int((ts - position["entry_time"]).total_seconds() / 60)
+                fee   = (entry_price + price) * qty * fee_pct  # 진입+청산 수수료
+                pnl   = (price - entry_price) * qty - fee
+                hold  = int((ts - position["entry_time"]).total_seconds() / 60)
                 equity += pnl
                 trades.append({
                     "open_ts":      position["entry_time"],
@@ -628,6 +646,7 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict, initial_equity=
                     "exit":         round(price, 4),
                     "qty":          round(qty, 6),
                     "pnl_usdt":     round(pnl, 4),
+                    "fee_usdt":     round(fee, 4),
                     "hold_minutes": hold,
                     "reason":       exit_reason,
                     "entry_idx":    position["entry_idx"],
@@ -639,7 +658,8 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict, initial_equity=
     # Force close last position
     if position is not None:
         last_price = df.iloc[-1]["close"]
-        pnl = (last_price - position["entry_price"]) * position["qty"]
+        fee  = (position["entry_price"] + last_price) * position["qty"] * fee_pct
+        pnl  = (last_price - position["entry_price"]) * position["qty"] - fee
         hold = int((df.iloc[-1]["open_time"] - position["entry_time"]).total_seconds() / 60)
         equity += pnl
         trades.append({
@@ -649,6 +669,7 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict, initial_equity=
             "exit":         round(last_price, 4),
             "qty":          round(position["qty"], 6),
             "pnl_usdt":     round(pnl, 4),
+            "fee_usdt":     round(fee, 4),
             "hold_minutes": hold,
             "reason":       "CLOSE",
             "entry_idx":    position["entry_idx"],
@@ -682,7 +703,9 @@ if run_clicked:
 
         with st.spinner(t["running"]):
             params = parse_strategy_with_ai(strategy_text, indicator, lang)
-            result = run_backtest(df_raw, indicator, params)
+            result = run_backtest(df_raw, indicator, params,
+                                  initial_equity=initial_equity,
+                                  fee_pct=fee_pct / 100)
 
         st.session_state.bt_result = result
         if plan == "free":
@@ -907,9 +930,9 @@ with tab2:
     if n_trades == 0:
         st.info("No trades executed." if lang == "en" else "거래 없음.")
     else:
-        display = df_tr[["open_ts","close_ts","entry","exit","pnl_usdt","hold_minutes","reason"]].copy()
+        display = df_tr[["open_ts","close_ts","entry","exit","pnl_usdt","fee_usdt","hold_minutes","reason"]].copy()
         display.columns = [t["col_open"], t["col_close"], t["col_entry"], t["col_exit"],
-                           t["col_pnl"], t["col_hold"], "Reason"]
+                           t["col_pnl"], "Fee (USDT)", t["col_hold"], "Reason"]
         display[t["col_result"]] = display[t["col_pnl"]].apply(
             lambda x: "✅ WIN" if x > 0 else "❌ LOSS"
         )
