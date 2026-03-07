@@ -322,22 +322,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Strategy input
-    st.markdown(f"#### {t['strategy_section']}")
-    with st.expander(t["strategy_guide"]):
-        st.markdown(t["guide_content"])
-
-    strategy_text = st.text_area(
-        t["strategy_label"],
-        placeholder=t["strategy_placeholder"],
-        height=140,
-        label_visibility="collapsed",
-    )
-
-    run_clicked = st.button(t["run_btn"])
-
-    st.divider()
-
     # Code input
     st.markdown(f"#### {t['enter_code']}")
     code_input = st.text_input("", placeholder="BT-XXXX-XXXX", type="password", label_visibility="collapsed")
@@ -372,9 +356,41 @@ st.markdown(f"## {t['title']}")
 st.markdown(f'<p style="color:#4a6080;font-family:JetBrains Mono,monospace;font-size:0.8rem;">{t["subtitle"]}</p>', unsafe_allow_html=True)
 st.divider()
 
+# ── Strategy input (메인 화면) ────────────────────────────────
+st.markdown(f"### {t['strategy_section']}")
+
+with st.expander(t["strategy_guide"], expanded=False):
+    st.markdown(t["guide_content"])
+
+st.markdown(
+    '<div style="border:2px solid #1e2d4a;border-radius:10px;padding:4px 8px;'
+    'background:#0d1421;margin-bottom:4px;">'
+    '<span style="font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#4a6080;">'
+    '✏️ ' + ("Write your strategy below" if "en" in str(st.session_state.lang) else "전략을 아래에 입력하세요") +
+    '</span></div>',
+    unsafe_allow_html=True,
+)
+
+strategy_text = st.text_area(
+    label="strategy_input",
+    placeholder=TEXTS[st.session_state.lang]["strategy_placeholder"],
+    height=130,
+    label_visibility="collapsed",
+    key="strategy_input_main",
+)
+
+# RUN 버튼 — 크고 명확하게
+st.markdown("<br>", unsafe_allow_html=True)
+run_clicked = st.button(
+    label=TEXTS[st.session_state.lang]["run_btn"],
+    use_container_width=True,
+    type="primary",
+)
+st.divider()
+
 # ── Backtest engine ───────────────────────────────────────────
 def fetch_binance_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
-    url = "https://api.binance.com/api/v3/klines"
+    url = "https://api.binance.us/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
