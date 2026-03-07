@@ -130,7 +130,7 @@ Buy when price touches lower Bollinger Band. Sell at middle band. Stop loss 1%.
         "code_fail": "❌ Invalid code",
         "how_sub": "🛒 How to Subscribe",
         "sub_steps": ["1. Choose plan → pay via Gumroad", "2. Check email for code", "3. Enter code above"],
-        "buy_pro": "🚀 Buy Pro — $19/mo",
+        "buy_pro": "🚀 Buy Pro — $9/mo",
         "tab_result": "Result",
         "tab_trades": "Trade Log",
         "tab_ai": "AI Analysis",
@@ -204,7 +204,7 @@ RSI 30 미만(과매도)이면 매수. RSI 70 초과(과매수)이면 매도. �
         "code_fail": "❌ 잘못된 코드",
         "how_sub": "🛒 구독 방법",
         "sub_steps": ["1. 플랜 선택 → Gumroad 결제", "2. 이메일로 코드 수신", "3. 위에 코드 입력"],
-        "buy_pro": "🚀 Pro 구매 — $19/월",
+        "buy_pro": "🚀 Pro 구매 — $9/월",
         "tab_result": "결과",
         "tab_trades": "거래 내역",
         "tab_ai": "AI 분석",
@@ -477,22 +477,28 @@ def parse_strategy_with_ai(strategy_text: str, indicator: str, lang: str) -> dic
         # fallback: default params
         return {"stop_loss_pct": 1.5, "take_profit_pct": 3.0, "indicator": indicator}
 
-    prompt = f"""You are a trading strategy parser. Convert the following strategy description into JSON parameters.
+    prompt = f"""You are a trading strategy parser. Extract ALL conditions from the strategy and convert to JSON.
 
 Indicator: {indicator}
 Strategy: {strategy_text}
 
 Return ONLY a JSON object with these fields:
-- stop_loss_pct: float (default 1.5)
-- take_profit_pct: float (default 3.0, 0 = no take profit)
-- rsi_oversold: float (for RSI, default 30)
-- rsi_overbought: float (for RSI, default 70)
-- use_ema_filter: bool (default false)
-- ema_period: int (default 200)
+- stop_loss_pct: float (default 1.5, e.g. "stop loss 2%" -> 2.0)
+- take_profit_pct: float (default 0, e.g. "take profit 3%" -> 3.0, 0=disabled)
+- rsi_oversold: float (RSI entry threshold, default 30)
+- rsi_overbought: float (RSI exit threshold, default 70)
+- use_ema_filter: bool (true if EMA/MA trend filter mentioned, default false)
+- ema_period: int (EMA period, default 200)
+- macd_hist_min: float (MACD histogram abs minimum for entry, default 0. e.g. "histogram > 10" -> 10.0)
+- bb_exit_at_mid: bool (BB exit at middle band=true, upper band=false, default true)
 
-Example: {{"stop_loss_pct": 1.5, "take_profit_pct": 3.0, "rsi_oversold": 30, "rsi_overbought": 70, "use_ema_filter": false, "ema_period": 200}}
+Examples:
+- "MACD crosses above signal AND histogram absolute value > 10, stop loss 1.5%" -> {{"stop_loss_pct":1.5,"macd_hist_min":10.0,"use_ema_filter":false,"ema_period":200,"take_profit_pct":0}}
+- "RSI below 25 buy, above 75 sell, stop loss 2%, take profit 4%" -> {{"stop_loss_pct":2.0,"take_profit_pct":4.0,"rsi_oversold":25,"rsi_overbought":75,"use_ema_filter":false}}
+- "Buy at lower BB, sell at middle band, only above 200 EMA" -> {{"stop_loss_pct":1.5,"take_profit_pct":0,"bb_exit_at_mid":true,"use_ema_filter":true,"ema_period":200}}
 
-Return ONLY the JSON, no explanation."""
+Return ONLY the JSON, no explanation, no markdown."""
+
 
     try:
         resp = requests.post(
@@ -548,7 +554,9 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict, initial_equity=
                 if i >= 1:
                     prev_diff = df.loc[i-1, "macd"] - df.loc[i-1, "signal"]
                     curr_diff = df.loc[i,   "macd"] - df.loc[i,   "signal"]
-                    entry_signal = (prev_diff < 0 and curr_diff >= 0)  # bullish cross
+                    hist_abs  = abs(df.loc[i, "hist"]) if "hist" in df.columns else 999
+                    hist_min  = float(params.get("macd_hist_min", 0))
+                    entry_signal = (prev_diff < 0 and curr_diff >= 0 and hist_abs > hist_min)
 
             elif indicator == "RSI":
                 rsi_val = df.loc[i, "rsi"] if "rsi" in df.columns else 50
