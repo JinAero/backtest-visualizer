@@ -1,179 +1,340 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import requests
+import os
+from datetime import datetime, timezone
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import io, re, os, json
-from datetime import datetime
 
-# ── Page config ──────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────
 st.set_page_config(
-    page_title="Backtest Result Visualizer",
+    page_title="Backtest Visualizer",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── DeepSeek AI ───────────────────────────────────────────────
-def get_ai_key():
+# ── Dark theme CSS ────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+
+html, body, [class*="css"] {
+    background-color: #080c14;
+    color: #e2e8f0;
+    font-family: 'Syne', sans-serif;
+}
+section[data-testid="stSidebar"] {
+    background-color: #0d1421 !important;
+    border-right: 1px solid #1e2d4a;
+}
+.stButton > button {
+    background: linear-gradient(135deg, #00d4ff, #7c3aed);
+    color: white; border: none; border-radius: 8px;
+    font-family: 'Syne', sans-serif; font-weight: 700;
+    padding: 10px 20px; width: 100%;
+    transition: opacity 0.2s;
+}
+.stButton > button:hover { opacity: 0.85; color: white; }
+.stSelectbox > div > div {
+    background-color: #0d1421 !important;
+    border: 1px solid #1e2d4a !important;
+    color: #e2e8f0 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+.stSlider > div > div { color: #00d4ff; }
+div[data-testid="metric-container"] {
+    background: #0d1421;
+    border: 1px solid #1e2d4a;
+    border-radius: 10px;
+    padding: 16px;
+}
+.stTabs [data-baseweb="tab"] {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: #4a6080;
+}
+.stTabs [aria-selected="true"] {
+    color: #00d4ff !important;
+    border-bottom-color: #00d4ff !important;
+}
+.stDataFrame { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; }
+hr { border-color: #1e2d4a; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Helpers ───────────────────────────────────────────────────
+def get_deepseek_key():
     try:
         return st.secrets["DEEPSEEK_API_KEY"]
     except Exception:
         return os.environ.get("DEEPSEEK_API_KEY", "")
 
-# ── Language strings ──────────────────────────────────────────
-def get_texts(lang="en"):
-    en = {
-        "title": "📊 Backtest Result Visualizer",
-        "subtitle": "Upload your bot's CSV output and visualize performance instantly.",
-        "sidebar_lang": "🇰🇷 한국어",
-        "sidebar_plan": "🔑 Plan",
-        "upload_trades": "Upload TRADES CSV",
-        "upload_summary": "Upload SUMMARY CSV",
-        "upload_result": "Upload RESULT CSV (optional)",
-        "drop_hint": "CSV files exported from your trading bot",
-        "tab_overview": "Overview",
-        "tab_trades": "Trade Log",
-        "tab_equity": "Equity Curve",
-        "tab_ai": "AI Analysis",
-        "total_pnl": "Total PnL",
-        "winrate": "Win Rate",
-        "trades": "Trades",
-        "avg_pnl": "Avg PnL/Trade",
-        "max_win": "Max Win",
-        "max_loss": "Max Loss",
-        "consec_loss": "Max Consec. Losses",
-        "avg_hold": "Avg Hold Time",
-        "minutes": "min",
-        "no_file": "👆 Upload your TRADES CSV to get started",
-        "no_summary": "Upload SUMMARY CSV for overview stats",
-        "ai_btn": "🤖 Analyze with AI",
-        "ai_loading": "Analyzing...",
-        "ai_pro_only": "🔑 AI Analysis is available on Pro plan",
-        "plan_free": "Free Plan",
-        "plan_pro": "💎 Pro Plan",
-        "free_features": ["Upload & visualize CSV", "Equity curve", "Trade log table"],
-        "pro_features": ["Everything in Free", "AI pattern analysis", "Improvement suggestions", "Export report"],
-        "enter_code": "🔑 Enter Subscription Code",
-        "apply_code": "Apply Code",
-        "code_ok": "💎 Pro plan activated!",
-        "code_fail": "❌ Invalid code",
-        "how_subscribe": "🛒 How to Subscribe",
-        "sub_steps": ["1. Choose a plan below", "2. Pay via Gumroad — get code by email", "3. Enter code above"],
-        "buy_pro": "💎 Buy Pro",
-        "trade_open": "Open Time",
-        "trade_close": "Close Time",
-        "trade_side": "Side",
-        "trade_entry": "Entry",
-        "trade_exit": "Exit",
-        "trade_pnl": "PnL (USDT)",
-        "trade_hold": "Hold (min)",
-        "equity_title": "Price & Equity Curve",
-        "no_result_file": "Upload RESULT CSV to see equity curve with price overlay",
-        "equity_from_trades": "Equity curve (from trades)",
-    }
-    ko = {
-        "title": "📊 백테스트 결과 시각화",
-        "subtitle": "봇이 출력한 CSV 파일을 업로드하면 성과를 바로 시각화합니다.",
-        "sidebar_lang": "🇺🇸 English",
-        "sidebar_plan": "🔑 플랜",
-        "upload_trades": "TRADES CSV 업로드",
-        "upload_summary": "SUMMARY CSV 업로드",
-        "upload_result": "RESULT CSV 업로드 (선택)",
-        "drop_hint": "트레이딩 봇이 출력한 CSV 파일",
-        "tab_overview": "개요",
-        "tab_trades": "거래 내역",
-        "tab_equity": "에쿼티 커브",
-        "tab_ai": "AI 분석",
-        "total_pnl": "총 PnL",
-        "winrate": "승률",
-        "trades": "거래 횟수",
-        "avg_pnl": "평균 PnL",
-        "max_win": "최대 수익",
-        "max_loss": "최대 손실",
-        "consec_loss": "최대 연속 손실",
-        "avg_hold": "평균 보유시간",
-        "minutes": "분",
-        "no_file": "👆 TRADES CSV를 업로드하세요",
-        "no_summary": "SUMMARY CSV를 업로드하면 통계가 표시됩니다",
-        "ai_btn": "🤖 AI 분석 실행",
-        "ai_loading": "분석 중...",
-        "ai_pro_only": "🔑 AI 분석은 Pro 플랜에서 사용 가능합니다",
-        "plan_free": "무료 플랜",
-        "plan_pro": "💎 Pro 플랜",
-        "free_features": ["CSV 업로드 & 시각화", "에쿼티 커브", "거래 내역 테이블"],
-        "pro_features": ["무료 플랜 전체 포함", "AI 패턴 분석", "개선 제안", "리포트 내보내기"],
-        "enter_code": "🔑 구독 코드 입력",
-        "apply_code": "코드 적용",
-        "code_ok": "💎 Pro 플랜 활성화!",
-        "code_fail": "❌ 잘못된 코드입니다",
-        "how_subscribe": "🛒 구독 방법",
-        "sub_steps": ["1. 아래에서 플랜 선택", "2. Gumroad 결제 → 이메일로 코드 수신", "3. 위에 코드 입력"],
-        "buy_pro": "💎 Pro 구매",
-        "trade_open": "진입 시간",
-        "trade_close": "청산 시간",
-        "trade_side": "방향",
-        "trade_entry": "진입가",
-        "trade_exit": "청산가",
-        "trade_pnl": "PnL (USDT)",
-        "trade_hold": "보유(분)",
-        "equity_title": "가격 & 에쿼티 커브",
-        "no_result_file": "RESULT CSV를 업로드하면 가격과 에쿼티를 함께 볼 수 있습니다",
-        "equity_from_trades": "에쿼티 커브 (거래 기반)",
-    }
-    return ko if lang == "ko" else en
-
-# ── Subscription codes ────────────────────────────────────────
 def load_pro_codes():
     try:
         raw = st.secrets.get("PRO_CODES", "")
         if raw:
-            return [c.strip() for c in raw.split(",") if c.strip()]
+            return [c.strip().upper() for c in raw.split(",") if c.strip()]
     except Exception:
         pass
     return []
 
-def check_code(code):
+def check_code(code: str) -> str:
+    """Returns 'pro', 'standard', or '' """
+    code = code.strip().upper()
     pro_codes = load_pro_codes()
-    return code.strip().upper() in [c.upper() for c in pro_codes]
+    if code in pro_codes:
+        return "pro"
+    return ""
+
+# ── Language ──────────────────────────────────────────────────
+TEXTS = {
+    "en": {
+        "title": "📊 Backtest Visualizer",
+        "subtitle": "Describe your strategy in plain English — AI converts it to logic and backtests it live.",
+        "lang_btn": "🇰🇷 한국어",
+        "plan_section": "🔑 Plan",
+        "free_plan": "FREE",
+        "std_plan": "💎 STANDARD",
+        "pro_plan": "🚀 PRO",
+        "runs_left": "runs left this session",
+        "settings": "⚙️ Settings",
+        "indicator": "Indicator",
+        "symbol": "Symbol",
+        "timeframe": "Timeframe",
+        "candles": "Candles",
+        "strategy_section": "📝 Strategy",
+        "strategy_label": "Describe your strategy",
+        "strategy_placeholder": "Example:\nBuy when MACD line crosses above signal line.\nSell when MACD line crosses below signal line.\nStop loss: 1.5%",
+        "strategy_guide": "💡 Guide",
+        "guide_content": """**How to write a strategy:**
+- Entry condition (e.g. "Buy when RSI drops below 30")
+- Exit condition (e.g. "Sell when RSI rises above 70")
+- Optional: Stop loss %, Take profit %
+- Optional: Trend filter (e.g. "Only buy above 200 EMA")
+
+**MACD example:**
+Buy when MACD crosses above signal. Sell when MACD crosses below signal. Stop loss 1.5%.
+
+**RSI example:**
+Buy when RSI < 30 (oversold). Sell when RSI > 70 (overbought). Stop loss 2%.
+
+**BB example:**
+Buy when price touches lower Bollinger Band. Sell at middle band. Stop loss 1%.
+""",
+        "run_btn": "▶ RUN BACKTEST",
+        "enter_code": "🔑 Enter Subscription Code",
+        "apply_code": "Apply",
+        "code_ok": "🚀 Pro plan activated!",
+        "code_fail": "❌ Invalid code",
+        "how_sub": "🛒 How to Subscribe",
+        "sub_steps": ["1. Choose plan → pay via Gumroad", "2. Check email for code", "3. Enter code above"],
+        "buy_pro": "🚀 Buy Pro — $19/mo",
+        "tab_result": "Result",
+        "tab_trades": "Trade Log",
+        "tab_ai": "AI Analysis",
+        "total_pnl": "Total PnL",
+        "winrate": "Win Rate",
+        "avg_hold": "Avg Hold",
+        "max_loss": "Max Loss",
+        "consec_loss": "Max Consec. Loss",
+        "trades_count": "Trades",
+        "price_chart": "Price Chart — Entry / Exit Points",
+        "equity_chart": "Equity Curve",
+        "trade_log": "Trade Log",
+        "ai_btn": "🤖 Analyze with AI",
+        "ai_loading": "Analyzing your strategy...",
+        "ai_pro_only": "🔑 AI Analysis requires Pro plan",
+        "no_runs": "⚠️ No runs left. Upgrade to Pro for unlimited backtests.",
+        "fetching": "Fetching data from Binance...",
+        "running": "Running backtest...",
+        "free_limit_tf": "⚠️ Free plan: 1H timeframe only",
+        "free_limit_candles": "⚠️ Free plan: max 30 candles",
+        "minutes": "min",
+        "legend_entry": "Entry",
+        "legend_exit_win": "Exit (Win)",
+        "legend_exit_loss": "Exit (Loss)",
+        "col_open": "Open Time",
+        "col_close": "Close Time",
+        "col_side": "Side",
+        "col_entry": "Entry",
+        "col_exit": "Exit",
+        "col_pnl": "PnL (USDT)",
+        "col_hold": "Hold (min)",
+        "col_result": "Result",
+    },
+    "ko": {
+        "title": "📊 백테스트 시각화",
+        "subtitle": "전략을 글로 설명하면 AI가 로직으로 변환해서 바로 백테스팅합니다.",
+        "lang_btn": "🇺🇸 English",
+        "plan_section": "🔑 플랜",
+        "free_plan": "무료",
+        "std_plan": "💎 스탠다드",
+        "pro_plan": "🚀 프로",
+        "runs_left": "회 남음",
+        "settings": "⚙️ 설정",
+        "indicator": "지표",
+        "symbol": "심볼",
+        "timeframe": "타임프레임",
+        "candles": "봉 개수",
+        "strategy_section": "📝 전략",
+        "strategy_label": "전략을 글로 설명하세요",
+        "strategy_placeholder": "예시:\nMACD 라인이 시그널 라인을 상향 돌파하면 매수.\nMACD 라인이 시그널 라인을 하향 돌파하면 매도.\n손절: 1.5%",
+        "strategy_guide": "💡 작성 가이드",
+        "guide_content": """**전략 작성 방법:**
+- 진입 조건 (예: "RSI가 30 아래로 내려가면 매수")
+- 청산 조건 (예: "RSI가 70 위로 올라가면 매도")
+- 선택: 손절 %, 익절 %
+- 선택: 추세 필터 (예: "200 EMA 위에서만 매수")
+
+**MACD 예시:**
+MACD가 시그널을 상향 돌파하면 매수. 하향 돌파하면 매도. 손절 1.5%.
+
+**RSI 예시:**
+RSI 30 미만(과매도)이면 매수. RSI 70 초과(과매수)이면 매도. 손절 2%.
+
+**볼린저 밴드 예시:**
+가격이 하단 밴드에 터치하면 매수. 중간 밴드에서 매도. 손절 1%.
+""",
+        "run_btn": "▶ 백테스트 실행",
+        "enter_code": "🔑 구독 코드 입력",
+        "apply_code": "적용",
+        "code_ok": "🚀 Pro 플랜 활성화!",
+        "code_fail": "❌ 잘못된 코드",
+        "how_sub": "🛒 구독 방법",
+        "sub_steps": ["1. 플랜 선택 → Gumroad 결제", "2. 이메일로 코드 수신", "3. 위에 코드 입력"],
+        "buy_pro": "🚀 Pro 구매 — $19/월",
+        "tab_result": "결과",
+        "tab_trades": "거래 내역",
+        "tab_ai": "AI 분석",
+        "total_pnl": "총 PnL",
+        "winrate": "승률",
+        "avg_hold": "평균 보유",
+        "max_loss": "최대 손실",
+        "consec_loss": "최대 연속 손실",
+        "trades_count": "거래 횟수",
+        "price_chart": "가격 차트 — 진입 / 청산 포인트",
+        "equity_chart": "에쿼티 커브",
+        "trade_log": "거래 내역",
+        "ai_btn": "🤖 AI 분석 실행",
+        "ai_loading": "전략 분석 중...",
+        "ai_pro_only": "🔑 AI 분석은 Pro 플랜 전용입니다",
+        "no_runs": "⚠️ 실행 횟수가 소진되었습니다. Pro로 업그레이드하면 무제한 사용 가능합니다.",
+        "fetching": "바이낸스에서 데이터 수신 중...",
+        "running": "백테스트 실행 중...",
+        "free_limit_tf": "⚠️ 무료 플랜: 1시간봉 고정",
+        "free_limit_candles": "⚠️ 무료 플랜: 최대 30봉",
+        "minutes": "분",
+        "legend_entry": "진입",
+        "legend_exit_win": "청산(수익)",
+        "legend_exit_loss": "청산(손실)",
+        "col_open": "진입 시간",
+        "col_close": "청산 시간",
+        "col_side": "방향",
+        "col_entry": "진입가",
+        "col_exit": "청산가",
+        "col_pnl": "PnL (USDT)",
+        "col_hold": "보유(분)",
+        "col_result": "결과",
+    }
+}
 
 # ── Session state ─────────────────────────────────────────────
-if "lang" not in st.session_state:
-    st.session_state.lang = "en"
-if "plan" not in st.session_state:
-    st.session_state.plan = "free"
+if "lang"      not in st.session_state: st.session_state.lang = "en"
+if "plan"      not in st.session_state: st.session_state.plan = "free"
+if "runs_left" not in st.session_state: st.session_state.runs_left = 3
+if "bt_result" not in st.session_state: st.session_state.bt_result = None
 
 lang = st.session_state.lang
-t = get_texts(lang)
+t    = TEXTS[lang]
+plan = st.session_state.plan
 
 # ── Sidebar ───────────────────────────────────────────────────
 with st.sidebar:
-    if st.button(t["sidebar_lang"]):
+
+    # Language toggle
+    if st.button(t["lang_btn"]):
         st.session_state.lang = "ko" if lang == "en" else "en"
         st.rerun()
 
     st.divider()
 
     # Plan display
-    st.markdown(f"### {t['sidebar_plan']}")
-    plan_now = st.session_state.plan
+    st.markdown(f"### {t['plan_section']}")
 
-    free_box = "border:1px solid #4b5563;border-radius:8px;padding:10px;margin-bottom:8px;"
-    pro_box  = "border:2px solid #f59e0b;border-radius:8px;padding:10px;margin-bottom:8px;"
+    plan_colors = {"free": "#4a6080", "pro": "#7c3aed"}
+    plan_labels = {"free": t["free_plan"], "pro": t["pro_plan"]}
+    cur_color   = plan_colors.get(plan, "#4a6080")
+    cur_label   = plan_labels.get(plan, t["free_plan"])
 
     st.markdown(
-        f'<div style="{free_box if plan_now=="free" else "border:1px solid #374151;border-radius:8px;padding:10px;margin-bottom:8px;"}">'
-        f'<b>{"✅ " if plan_now=="free" else ""}{t["plan_free"]}</b><br>'
-        + "".join(f'<span style="font-size:0.8rem;color:#9ca3af;">· {f}</span><br>' for f in t["free_features"])
-        + "</div>",
+        f'<div style="background:#0d1421;border:1px solid {cur_color};border-radius:8px;'
+        f'padding:10px 14px;font-family:JetBrains Mono,monospace;font-size:0.8rem;">'
+        f'<b style="color:{cur_color};">{cur_label}</b>'
+        + (f'<br><span style="color:#ef4444;font-size:0.7rem;">▶ {st.session_state.runs_left} {t["runs_left"]}</span>'
+           if plan == "free" else
+           '<br><span style="color:#00ff88;font-size:0.7rem;">✓ Unlimited runs</span>')
+        + '</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        f'<div style="{pro_box if plan_now=="pro" else "border:1px solid #374151;border-radius:8px;padding:10px;margin-bottom:8px;"}">'
-        f'<b>{"✅ " if plan_now=="pro" else ""}💎 Pro — $19/mo</b><br>'
-        + "".join(f'<span style="font-size:0.8rem;color:#9ca3af;">· {f}</span><br>' for f in t["pro_features"])
-        + "</div>",
-        unsafe_allow_html=True,
+
+    st.divider()
+
+    # Settings
+    st.markdown(f"#### {t['settings']}")
+
+    indicator = st.selectbox(
+        t["indicator"],
+        ["MACD", "RSI", "Bollinger Bands"],
+        disabled=(plan == "free"),  # free는 MACD 고정
+        index=0,
     )
+    if plan == "free":
+        indicator = "MACD"
+
+    symbol_options = (
+        ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+        if plan == "pro" else ["ETHUSDT"]
+    )
+    symbol = st.selectbox(t["symbol"], symbol_options)
+
+    tf_options_all = {"1m":"1m","5m":"5m","15m":"15m","30m":"30m","1h":"1h","4h":"4h"}
+    if plan == "free":
+        tf = "1h"
+        st.markdown(
+            f'<span style="font-family:JetBrains Mono,monospace;font-size:0.75rem;color:#4a6080;">'
+            f'{t["timeframe"]}: <b style="color:#00d4ff;">1H</b> (Free fixed)</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        tf = st.selectbox(t["timeframe"], list(tf_options_all.keys()), index=4)
+
+    if plan == "free":
+        candles = 30
+        st.markdown(
+            f'<span style="font-family:JetBrains Mono,monospace;font-size:0.75rem;color:#4a6080;">'
+            f'{t["candles"]}: <b style="color:#00d4ff;">30</b> (Free fixed)</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        candles = st.slider(t["candles"], min_value=30, max_value=200, value=100, step=10)
+
+    st.divider()
+
+    # Strategy input
+    st.markdown(f"#### {t['strategy_section']}")
+    with st.expander(t["strategy_guide"]):
+        st.markdown(t["guide_content"])
+
+    strategy_text = st.text_area(
+        t["strategy_label"],
+        placeholder=t["strategy_placeholder"],
+        height=140,
+        label_visibility="collapsed",
+    )
+
+    run_clicked = st.button(t["run_btn"])
 
     st.divider()
 
@@ -181,7 +342,8 @@ with st.sidebar:
     st.markdown(f"#### {t['enter_code']}")
     code_input = st.text_input("", placeholder="BT-XXXX-XXXX", type="password", label_visibility="collapsed")
     if st.button(t["apply_code"]):
-        if check_code(code_input):
+        result = check_code(code_input)
+        if result == "pro":
             st.session_state.plan = "pro"
             st.success(t["code_ok"])
             st.rerun()
@@ -190,291 +352,588 @@ with st.sidebar:
 
     st.divider()
 
-    # How to subscribe
-    st.markdown(f"#### {t['how_subscribe']}")
+    st.markdown(f"#### {t['how_sub']}")
     for step in t["sub_steps"]:
-        st.markdown(f'<span style="font-size:0.8rem;color:#9ca3af;">{step}</span>', unsafe_allow_html=True)
-
-    GUMROAD_PRO = "https://sparkle488.gumroad.com"
-    col1, col2 = st.columns(2)
-    with col1:
         st.markdown(
-            f'<a href="{GUMROAD_PRO}" target="_blank">'
-            f'<div style="background:#f59e0b;color:#000;text-align:center;padding:6px;'
-            f'border-radius:8px;font-size:0.8rem;cursor:pointer;">{t["buy_pro"]}</div></a>',
+            f'<span style="font-family:JetBrains Mono,monospace;font-size:0.75rem;color:#4a6080;">{step}</span>',
             unsafe_allow_html=True,
         )
+    GUMROAD = "https://sparkle488.gumroad.com"
+    st.markdown(
+        f'<br><a href="{GUMROAD}" target="_blank">'
+        f'<div style="background:linear-gradient(135deg,#7c3aed,#00d4ff);color:#fff;'
+        f'text-align:center;padding:8px;border-radius:8px;font-size:0.8rem;'
+        f'font-weight:700;cursor:pointer;">{t["buy_pro"]}</div></a>',
+        unsafe_allow_html=True,
+    )
 
 # ── Main ──────────────────────────────────────────────────────
 st.markdown(f"## {t['title']}")
-st.markdown(f'<p style="color:#9ca3af;">{t["subtitle"]}</p>', unsafe_allow_html=True)
+st.markdown(f'<p style="color:#4a6080;font-family:JetBrains Mono,monospace;font-size:0.8rem;">{t["subtitle"]}</p>', unsafe_allow_html=True)
 st.divider()
 
-# File upload
-col_a, col_b, col_c = st.columns(3)
-with col_a:
-    trades_file = st.file_uploader(t["upload_trades"], type="csv", key="trades")
-with col_b:
-    summary_file = st.file_uploader(t["upload_summary"], type="csv", key="summary")
-with col_c:
-    result_file = st.file_uploader(t["upload_result"], type="csv", key="result")
+# ── Backtest engine ───────────────────────────────────────────
+def fetch_binance_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
+    url = "https://api.binance.com/api/v3/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    r = requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
+    data = r.json()
+    df = pd.DataFrame(data, columns=[
+        "open_time","open","high","low","close","volume",
+        "close_time","qav","trades","tbav","tqav","ignore"
+    ])
+    for col in ["open","high","low","close","volume"]:
+        df[col] = df[col].astype(float)
+    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
+    return df[["open_time","open","high","low","close","volume"]]
 
-if not trades_file:
-    st.info(t["no_file"])
+
+def calc_macd(df: pd.DataFrame, fast=12, slow=26, signal=9):
+    df = df.copy()
+    df["ema_fast"] = df["close"].ewm(span=fast).mean()
+    df["ema_slow"] = df["close"].ewm(span=slow).mean()
+    df["macd"]     = df["ema_fast"] - df["ema_slow"]
+    df["signal"]   = df["macd"].ewm(span=signal).mean()
+    df["hist"]     = df["macd"] - df["signal"]
+    return df
+
+
+def calc_rsi(df: pd.DataFrame, period=14):
+    df = df.copy()
+    delta = df["close"].diff()
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta.clip(upper=0)).rolling(period).mean()
+    rs    = gain / (loss + 1e-10)
+    df["rsi"] = 100 - (100 / (1 + rs))
+    return df
+
+
+def calc_bb(df: pd.DataFrame, period=20, std=2):
+    df = df.copy()
+    df["bb_mid"]   = df["close"].rolling(period).mean()
+    df["bb_std"]   = df["close"].rolling(period).std()
+    df["bb_upper"] = df["bb_mid"] + std * df["bb_std"]
+    df["bb_lower"] = df["bb_mid"] - std * df["bb_std"]
+    return df
+
+
+def parse_strategy_with_ai(strategy_text: str, indicator: str, lang: str) -> dict:
+    """DeepSeek으로 전략 텍스트 → Python 파라미터 변환"""
+    api_key = get_deepseek_key()
+    if not api_key:
+        # fallback: default params
+        return {"stop_loss_pct": 1.5, "take_profit_pct": 3.0, "indicator": indicator}
+
+    prompt = f"""You are a trading strategy parser. Convert the following strategy description into JSON parameters.
+
+Indicator: {indicator}
+Strategy: {strategy_text}
+
+Return ONLY a JSON object with these fields:
+- stop_loss_pct: float (default 1.5)
+- take_profit_pct: float (default 3.0, 0 = no take profit)
+- rsi_oversold: float (for RSI, default 30)
+- rsi_overbought: float (for RSI, default 70)
+- use_ema_filter: bool (default false)
+- ema_period: int (default 200)
+
+Example: {{"stop_loss_pct": 1.5, "take_profit_pct": 3.0, "rsi_oversold": 30, "rsi_overbought": 70, "use_ema_filter": false, "ema_period": 200}}
+
+Return ONLY the JSON, no explanation."""
+
+    try:
+        resp = requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": 200, "temperature": 0.1},
+            timeout=15,
+        )
+        import json, re
+        text = resp.json()["choices"][0]["message"]["content"]
+        text = re.sub(r"```json|```", "", text).strip()
+        return json.loads(text)
+    except Exception:
+        return {"stop_loss_pct": 1.5, "take_profit_pct": 3.0,
+                "rsi_oversold": 30, "rsi_overbought": 70,
+                "use_ema_filter": False, "ema_period": 200}
+
+
+def run_backtest(df: pd.DataFrame, indicator: str, params: dict, initial_equity=30.0) -> dict:
+    df = df.copy().reset_index(drop=True)
+
+    # Calculate indicators
+    if indicator == "MACD":
+        df = calc_macd(df)
+    elif indicator == "RSI":
+        df = calc_rsi(df)
+    elif indicator == "Bollinger Bands":
+        df = calc_bb(df)
+
+    # EMA filter
+    if params.get("use_ema_filter"):
+        ema_p = int(params.get("ema_period", 200))
+        df["ema_filter"] = df["close"].ewm(span=ema_p).mean()
+
+    sl_pct = float(params.get("stop_loss_pct", 1.5)) / 100
+    tp_pct = float(params.get("take_profit_pct", 0))  / 100
+
+    trades = []
+    equity = initial_equity
+    position = None  # {"entry_price", "entry_idx", "entry_time", "qty"}
+    qty_usdt = equity * 0.1  # 10% position size
+
+    for i in range(1, len(df)):
+        price  = df.loc[i, "close"]
+        ts     = df.loc[i, "open_time"]
+
+        # ── Entry logic ──
+        if position is None:
+            entry_signal = False
+
+            if indicator == "MACD":
+                if i >= 1:
+                    prev_diff = df.loc[i-1, "macd"] - df.loc[i-1, "signal"]
+                    curr_diff = df.loc[i,   "macd"] - df.loc[i,   "signal"]
+                    entry_signal = (prev_diff < 0 and curr_diff >= 0)  # bullish cross
+
+            elif indicator == "RSI":
+                rsi_val = df.loc[i, "rsi"] if "rsi" in df.columns else 50
+                entry_signal = (rsi_val < float(params.get("rsi_oversold", 30)))
+
+            elif indicator == "Bollinger Bands":
+                if "bb_lower" in df.columns:
+                    entry_signal = (price <= df.loc[i, "bb_lower"])
+
+            # EMA filter
+            if params.get("use_ema_filter") and "ema_filter" in df.columns:
+                entry_signal = entry_signal and (price > df.loc[i, "ema_filter"])
+
+            if entry_signal:
+                qty = qty_usdt / price
+                position = {
+                    "entry_price": price,
+                    "entry_idx":   i,
+                    "entry_time":  ts,
+                    "qty":         qty,
+                }
+
+        # ── Exit logic ──
+        elif position is not None:
+            entry_price = position["entry_price"]
+            qty         = position["qty"]
+            pct_change  = (price - entry_price) / entry_price
+            exit_signal = False
+            exit_reason = ""
+
+            # Stop loss
+            if sl_pct > 0 and pct_change <= -sl_pct:
+                exit_signal = True
+                exit_reason = "SL"
+
+            # Take profit
+            elif tp_pct > 0 and pct_change >= tp_pct:
+                exit_signal = True
+                exit_reason = "TP"
+
+            # Indicator exit
+            else:
+                if indicator == "MACD":
+                    prev_diff = df.loc[i-1, "macd"] - df.loc[i-1, "signal"]
+                    curr_diff = df.loc[i,   "macd"] - df.loc[i,   "signal"]
+                    if prev_diff >= 0 and curr_diff < 0:  # bearish cross
+                        exit_signal = True
+                        exit_reason = "SIGNAL"
+
+                elif indicator == "RSI":
+                    rsi_val = df.loc[i, "rsi"] if "rsi" in df.columns else 50
+                    if rsi_val > float(params.get("rsi_overbought", 70)):
+                        exit_signal = True
+                        exit_reason = "SIGNAL"
+
+                elif indicator == "Bollinger Bands":
+                    if "bb_mid" in df.columns and price >= df.loc[i, "bb_mid"]:
+                        exit_signal = True
+                        exit_reason = "SIGNAL"
+
+            if exit_signal:
+                pnl = (price - entry_price) * qty
+                hold = int((ts - position["entry_time"]).total_seconds() / 60)
+                equity += pnl
+                trades.append({
+                    "open_ts":      position["entry_time"],
+                    "close_ts":     ts,
+                    "entry":        round(entry_price, 4),
+                    "exit":         round(price, 4),
+                    "qty":          round(qty, 6),
+                    "pnl_usdt":     round(pnl, 4),
+                    "hold_minutes": hold,
+                    "reason":       exit_reason,
+                    "entry_idx":    position["entry_idx"],
+                    "exit_idx":     i,
+                })
+                position = None
+                qty_usdt = equity * 0.1  # rebalance
+
+    # Force close last position
+    if position is not None:
+        last_price = df.iloc[-1]["close"]
+        pnl = (last_price - position["entry_price"]) * position["qty"]
+        hold = int((df.iloc[-1]["open_time"] - position["entry_time"]).total_seconds() / 60)
+        equity += pnl
+        trades.append({
+            "open_ts":      position["entry_time"],
+            "close_ts":     df.iloc[-1]["open_time"],
+            "entry":        round(position["entry_price"], 4),
+            "exit":         round(last_price, 4),
+            "qty":          round(position["qty"], 6),
+            "pnl_usdt":     round(pnl, 4),
+            "hold_minutes": hold,
+            "reason":       "CLOSE",
+            "entry_idx":    position["entry_idx"],
+            "exit_idx":     len(df)-1,
+        })
+
+    df_trades = pd.DataFrame(trades) if trades else pd.DataFrame()
+
+    return {
+        "df":         df,
+        "df_trades":  df_trades,
+        "initial_eq": initial_equity,
+        "final_eq":   round(equity, 4),
+        "indicator":  indicator,
+    }
+
+
+# ── Run backtest ──────────────────────────────────────────────
+if run_clicked:
+    if plan == "free" and st.session_state.runs_left <= 0:
+        st.error(t["no_runs"])
+    elif not strategy_text.strip():
+        st.warning("Please describe your strategy first." if lang == "en" else "전략을 먼저 입력해주세요.")
+    else:
+        with st.spinner(t["fetching"]):
+            try:
+                df_raw = fetch_binance_klines(symbol, tf, candles)
+            except Exception as e:
+                st.error(f"Binance API error: {e}")
+                st.stop()
+
+        with st.spinner(t["running"]):
+            params = parse_strategy_with_ai(strategy_text, indicator, lang)
+            result = run_backtest(df_raw, indicator, params)
+
+        st.session_state.bt_result = result
+        if plan == "free":
+            st.session_state.runs_left -= 1
+        st.rerun()
+
+
+# ── Display results ───────────────────────────────────────────
+res = st.session_state.bt_result
+
+if res is None:
+    st.markdown(
+        '<div style="text-align:center;padding:80px;color:#4a6080;'
+        'font-family:JetBrains Mono,monospace;font-size:0.85rem;">'
+        '← Describe your strategy and click RUN BACKTEST'
+        '</div>', unsafe_allow_html=True
+    )
     st.stop()
 
-# ── Load data ─────────────────────────────────────────────────
-df_trades  = pd.read_csv(trades_file)
-df_summary = pd.read_csv(summary_file) if summary_file else None
-df_result  = pd.read_csv(result_file)  if result_file  else None
+df       = res["df"]
+df_tr    = res["df_trades"]
+init_eq  = res["initial_eq"]
+final_eq = res["final_eq"]
+ind      = res["indicator"]
+
+# ── KPI ──────────────────────────────────────────────────────
+total_pnl   = round(final_eq - init_eq, 4)
+n_trades    = len(df_tr)
+wins        = int((df_tr["pnl_usdt"] > 0).sum()) if n_trades > 0 else 0
+losses      = n_trades - wins
+winrate     = round(wins / n_trades * 100, 1) if n_trades > 0 else 0
+avg_hold    = round(df_tr["hold_minutes"].mean(), 0) if n_trades > 0 else 0
+max_loss    = round(df_tr["pnl_usdt"].min(), 4) if n_trades > 0 else 0
+
+consec, cur = 0, 0
+for _, row in df_tr.iterrows():
+    if row["pnl_usdt"] < 0:
+        cur += 1; consec = max(consec, cur)
+    else:
+        cur = 0
+
+pnl_color  = "normal" if total_pnl >= 0 else "inverse"
+wr_color   = "normal" if winrate >= 50 else "inverse"
+
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric(t["total_pnl"],    f"{total_pnl:+.4f} U",  delta=f"{(total_pnl/init_eq*100):+.2f}%")
+c2.metric(t["winrate"],      f"{winrate}%",           delta=f"{wins}W {losses}L")
+c3.metric(t["trades_count"], str(n_trades))
+c4.metric(t["avg_hold"],     f"{avg_hold:.0f} {t['minutes']}")
+c5.metric(t["max_loss"],     f"{max_loss:.4f} U")
+c6.metric(t["consec_loss"],  str(consec))
+
+st.divider()
 
 # ── Tabs ──────────────────────────────────────────────────────
-tabs = st.tabs([t["tab_overview"], t["tab_trades"], t["tab_equity"], t["tab_ai"]])
+tab1, tab2, tab3 = st.tabs([t["tab_result"], t["tab_trades"], t["tab_ai"]])
 
-# ════════════════════════════════════════════
-# TAB 1 — Overview
-# ════════════════════════════════════════════
-with tabs[0]:
-    if df_summary is not None:
-        s = df_summary.iloc[0]
+# ════════════════════
+# TAB 1 — Charts
+# ════════════════════
+with tab1:
 
-        pnl   = float(s.get("total_pnl_usdt", 0))
-        wr    = float(s.get("winrate_pct", 0))
-        n     = int(s.get("trades", 0))
-        avg   = float(s.get("avg_pnl_usdt", 0))
-        mxw   = float(s.get("max_win_usdt", 0))
-        mxl   = float(s.get("max_loss_usdt", 0))
-        mcl   = int(s.get("max_consec_losses", 0))
+    COLORS = {
+        "price":  "#00d4ff",
+        "equity": "#f97316",
+        "entry":  "#00ff88",
+        "win":    "#00ff88",
+        "loss":   "#ff4466",
+        "hist_p": "#00ff88",
+        "hist_n": "#ff4466",
+        "macd":   "#00d4ff",
+        "signal": "#f97316",
+        "rsi":    "#a78bfa",
+        "bb_u":   "#4a6080",
+        "bb_l":   "#4a6080",
+        "bb_m":   "#94a3b8",
+    }
 
-        avg_hold = df_trades["hold_minutes"].mean() if "hold_minutes" in df_trades.columns else 0
+    # ── Price chart with indicator subplot ──
+    rows = 2
+    row_heights = [0.65, 0.35]
+    subplot_titles = [t["price_chart"], ind]
 
-        pnl_color  = "#22c55e" if pnl >= 0 else "#ef4444"
-        wr_color   = "#22c55e" if wr >= 50 else "#f59e0b"
+    fig = make_subplots(
+        rows=rows, cols=1,
+        shared_xaxes=True,
+        row_heights=row_heights,
+        vertical_spacing=0.04,
+        subplot_titles=subplot_titles,
+    )
 
-        c1, c2, c3, c4 = st.columns(4)
-        metric_style = "background:#111827;border-radius:10px;padding:16px;text-align:center;"
-        def metric_card(col, label, value, color="#f9fafb"):
-            col.markdown(
-                f'<div style="{metric_style}">'
-                f'<div style="color:#6b7280;font-size:0.8rem;">{label}</div>'
-                f'<div style="color:{color};font-size:1.6rem;font-weight:700;">{value}</div>'
-                f'</div>', unsafe_allow_html=True
+    # Price
+    fig.add_trace(go.Scatter(
+        x=df["open_time"], y=df["close"],
+        name="Price", line=dict(color=COLORS["price"], width=1.5),
+        hovertemplate="%{x}<br>%{y:.2f}<extra></extra>",
+    ), row=1, col=1)
+
+    # Entry/Exit markers
+    if n_trades > 0:
+        for _, trade in df_tr.iterrows():
+            color = COLORS["win"] if trade["pnl_usdt"] >= 0 else COLORS["loss"]
+            # Entry
+            fig.add_trace(go.Scatter(
+                x=[trade["open_ts"]], y=[trade["entry"]],
+                mode="markers",
+                marker=dict(symbol="triangle-up", color=COLORS["entry"], size=10),
+                name=t["legend_entry"], showlegend=False,
+                hovertemplate=f"Entry: {trade['entry']}<extra></extra>",
+            ), row=1, col=1)
+            # Exit
+            fig.add_trace(go.Scatter(
+                x=[trade["close_ts"]], y=[trade["exit"]],
+                mode="markers",
+                marker=dict(symbol="triangle-down", color=color, size=10),
+                name=t["legend_exit_win"] if trade["pnl_usdt"] >= 0 else t["legend_exit_loss"],
+                showlegend=False,
+                hovertemplate=f"Exit: {trade['exit']}<br>PnL: {trade['pnl_usdt']:+.4f}<extra></extra>",
+            ), row=1, col=1)
+            # Shaded region
+            fig.add_vrect(
+                x0=trade["open_ts"], x1=trade["close_ts"],
+                fillcolor=color, opacity=0.05,
+                layer="below", line_width=0,
+                row=1, col=1,
             )
 
-        metric_card(c1, t["total_pnl"],  f"{pnl:+.2f} USDT", pnl_color)
-        metric_card(c2, t["winrate"],    f"{wr:.1f}%",        wr_color)
-        metric_card(c3, t["trades"],     str(n))
-        metric_card(c4, t["avg_pnl"],    f"{avg:+.3f} USDT",  "#22c55e" if avg >= 0 else "#ef4444")
+    # Indicator subplot
+    if ind == "MACD" and "macd" in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df["open_time"], y=df["macd"],
+            name="MACD", line=dict(color=COLORS["macd"], width=1.2),
+        ), row=2, col=1)
+        fig.add_trace(go.Scatter(
+            x=df["open_time"], y=df["signal"],
+            name="Signal", line=dict(color=COLORS["signal"], width=1.2),
+        ), row=2, col=1)
+        colors_hist = [COLORS["hist_p"] if v >= 0 else COLORS["hist_n"] for v in df["hist"]]
+        fig.add_trace(go.Bar(
+            x=df["open_time"], y=df["hist"],
+            name="Histogram", marker_color=colors_hist, opacity=0.6,
+        ), row=2, col=1)
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        c5, c6, c7, c8 = st.columns(4)
-        metric_card(c5, t["max_win"],     f"+{mxw:.3f} USDT", "#22c55e")
-        metric_card(c6, t["max_loss"],    f"{mxl:.3f} USDT",  "#ef4444")
-        metric_card(c7, t["consec_loss"], str(mcl),            "#f59e0b")
-        metric_card(c8, t["avg_hold"],    f"{avg_hold:.0f} {t['minutes']}")
+    elif ind == "RSI" and "rsi" in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df["open_time"], y=df["rsi"],
+            name="RSI", line=dict(color=COLORS["rsi"], width=1.5),
+        ), row=2, col=1)
+        fig.add_hline(y=70, line=dict(color=COLORS["loss"],  width=1, dash="dot"), row=2, col=1)
+        fig.add_hline(y=30, line=dict(color=COLORS["entry"], width=1, dash="dot"), row=2, col=1)
+        fig.add_hrect(y0=70, y1=100, fillcolor=COLORS["loss"],  opacity=0.05, row=2, col=1)
+        fig.add_hrect(y0=0,  y1=30,  fillcolor=COLORS["entry"], opacity=0.05, row=2, col=1)
 
-    else:
-        st.info(t["no_summary"])
+    elif ind == "Bollinger Bands" and "bb_upper" in df.columns:
+        for col_name, label, color in [
+            ("bb_upper", "Upper", COLORS["bb_u"]),
+            ("bb_mid",   "Mid",   COLORS["bb_m"]),
+            ("bb_lower", "Lower", COLORS["bb_l"]),
+        ]:
+            fig.add_trace(go.Scatter(
+                x=df["open_time"], y=df[col_name],
+                name=label, line=dict(color=color, width=1, dash="dot" if col_name != "bb_mid" else "solid"),
+            ), row=2, col=1)
 
-        # Basic stats from trades only
-        if not df_trades.empty and "pnl_usdt" in df_trades.columns:
-            pnl_total = df_trades["pnl_usdt"].sum()
-            wins      = (df_trades["pnl_usdt"] > 0).sum()
-            total     = len(df_trades)
-            wr        = wins / total * 100 if total > 0 else 0
+    fig.update_layout(
+        height=500,
+        paper_bgcolor="#080c14", plot_bgcolor="#080c14",
+        font=dict(color="#e2e8f0", family="JetBrains Mono"),
+        legend=dict(bgcolor="#0d1421", bordercolor="#1e2d4a", borderwidth=1,
+                    font=dict(size=10)),
+        hovermode="x unified",
+        margin=dict(l=0, r=0, t=30, b=0),
+    )
+    fig.update_xaxes(gridcolor="#1e2d4a", zeroline=False)
+    fig.update_yaxes(gridcolor="#1e2d4a", zeroline=False)
+    st.plotly_chart(fig, use_container_width=True)
 
-            c1, c2, c3 = st.columns(3)
-            pnl_color = "#22c55e" if pnl_total >= 0 else "#ef4444"
-            metric_style = "background:#111827;border-radius:10px;padding:16px;text-align:center;"
-            def metric_card2(col, label, value, color="#f9fafb"):
-                col.markdown(
-                    f'<div style="{metric_style}">'
-                    f'<div style="color:#6b7280;font-size:0.8rem;">{label}</div>'
-                    f'<div style="color:{color};font-size:1.6rem;font-weight:700;">{value}</div>'
-                    f'</div>', unsafe_allow_html=True
-                )
-            metric_card2(c1, t["total_pnl"], f"{pnl_total:+.2f} USDT", pnl_color)
-            metric_card2(c2, t["winrate"],   f"{wr:.1f}%", "#22c55e" if wr >= 50 else "#f59e0b")
-            metric_card2(c3, t["trades"],    str(total))
+    # ── Equity curve ──
+    if n_trades > 0:
+        eq_vals = [init_eq]
+        eq_times = [df["open_time"].iloc[0]]
+        for _, trade in df_tr.iterrows():
+            eq_vals.append(eq_vals[-1] + trade["pnl_usdt"])
+            eq_times.append(trade["close_ts"])
 
-# ════════════════════════════════════════════
-# TAB 2 — Trade Log
-# ════════════════════════════════════════════
-with tabs[1]:
-    display = df_trades.copy()
-
-    rename_map = {}
-    if "open_ts"      in display.columns: rename_map["open_ts"]      = t["trade_open"]
-    if "close_ts"     in display.columns: rename_map["close_ts"]     = t["trade_close"]
-    if "side"         in display.columns: rename_map["side"]         = t["trade_side"]
-    if "entry"        in display.columns: rename_map["entry"]        = t["trade_entry"]
-    if "exit"         in display.columns: rename_map["exit"]         = t["trade_exit"]
-    if "pnl_usdt"     in display.columns: rename_map["pnl_usdt"]     = t["trade_pnl"]
-    if "hold_minutes" in display.columns: rename_map["hold_minutes"] = t["trade_hold"]
-
-    display = display.rename(columns=rename_map)
-
-    # Color PnL column
-    pnl_col = t["trade_pnl"]
-
-    def color_pnl(val):
-        try:
-            v = float(val)
-            return "color: #22c55e" if v > 0 else "color: #ef4444" if v < 0 else ""
-        except Exception:
-            return ""
-
-    styled = display.style.applymap(color_pnl, subset=[pnl_col]) if pnl_col in display.columns else display.style
-    st.dataframe(styled, use_container_width=True)
-
-# ════════════════════════════════════════════
-# TAB 3 — Equity Curve
-# ════════════════════════════════════════════
-with tabs[2]:
-    if df_result is not None and "equity" in df_result.columns and "close" in df_result.columns:
-        df_result["ts"] = pd.to_datetime(df_result["ts"])
-
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-        fig.add_trace(
-            go.Scatter(
-                x=df_result["ts"], y=df_result["close"],
-                name="Price", line=dict(color="#3b82f6", width=1.2),
-                hovertemplate="%{x}<br>Price: %{y:.2f}<extra></extra>",
-            ),
-            secondary_y=False,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=df_result["ts"], y=df_result["equity"],
-                name="Equity (USDT)", line=dict(color="#f97316", width=2),
-                hovertemplate="%{x}<br>Equity: %{y:.4f}<extra></extra>",
-            ),
-            secondary_y=True,
-        )
-
-        # Mark trades
-        if not df_trades.empty:
-            for _, row in df_trades.iterrows():
-                pnl_val = float(row.get("pnl_usdt", 0))
-                color   = "#22c55e" if pnl_val >= 0 else "#ef4444"
-                fig.add_vline(
-                    x=pd.Timestamp(row["open_ts"]).timestamp() * 1000,
-                    line=dict(color=color, width=1, dash="dot"),
-                    annotation_text="E" if lang == "en" else "진입",
-                    annotation_font_size=9,
-                )
-
-        fig.update_layout(
-            title=t["equity_title"],
-            paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
-            font=dict(color="#f9fafb"),
-            legend=dict(bgcolor="#1e293b"),
-            hovermode="x unified",
-            height=420,
-        )
-        fig.update_xaxes(gridcolor="#1e293b")
-        fig.update_yaxes(gridcolor="#1e293b", secondary_y=False, title_text="Price (USDT)")
-        fig.update_yaxes(gridcolor="#1e293b", secondary_y=True,  title_text="Equity (USDT)")
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    else:
-        # Simple equity from trades
-        st.info(t["no_result_file"])
-
-        if not df_trades.empty and "pnl_usdt" in df_trades.columns:
-            eq = df_trades["pnl_usdt"].cumsum()
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(
-                x=list(range(1, len(eq)+1)), y=eq,
-                mode="lines+markers",
-                line=dict(color="#f97316", width=2),
-                marker=dict(color=["#22c55e" if v >= 0 else "#ef4444" for v in df_trades["pnl_usdt"]], size=8),
-                name=t["equity_from_trades"],
+        fig_eq = go.Figure()
+        for i in range(1, len(eq_vals)):
+            color = COLORS["win"] if eq_vals[i] >= eq_vals[i-1] else COLORS["loss"]
+            fig_eq.add_trace(go.Scatter(
+                x=[eq_times[i-1], eq_times[i]],
+                y=[eq_vals[i-1], eq_vals[i]],
+                mode="lines",
+                line=dict(color=color, width=2),
+                showlegend=False,
+                hovertemplate=f"{eq_times[i].strftime('%m-%d %H:%M')}<br>{eq_vals[i]:.4f} USDT<extra></extra>",
             ))
-            fig2.update_layout(
-                paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
-                font=dict(color="#f9fafb"),
-                height=360,
-                xaxis_title="Trade #",
-                yaxis_title="Cumulative PnL (USDT)",
-            )
-            fig2.update_xaxes(gridcolor="#1e293b")
-            fig2.update_yaxes(gridcolor="#1e293b")
-            st.plotly_chart(fig2, use_container_width=True)
+        fig_eq.add_trace(go.Scatter(
+            x=eq_times, y=eq_vals,
+            mode="markers",
+            marker=dict(
+                color=[COLORS["entry"]] + [COLORS["win"] if eq_vals[i] >= eq_vals[i-1] else COLORS["loss"]
+                                            for i in range(1, len(eq_vals))],
+                size=7,
+            ),
+            showlegend=False,
+        ))
+        fig_eq.update_layout(
+            title=dict(text=t["equity_chart"], font=dict(size=12)),
+            height=200,
+            paper_bgcolor="#080c14", plot_bgcolor="#080c14",
+            font=dict(color="#e2e8f0", family="JetBrains Mono", size=10),
+            margin=dict(l=0, r=0, t=30, b=0),
+        )
+        fig_eq.update_xaxes(gridcolor="#1e2d4a")
+        fig_eq.update_yaxes(gridcolor="#1e2d4a")
+        st.plotly_chart(fig_eq, use_container_width=True)
 
-# ════════════════════════════════════════════
-# TAB 4 — AI Analysis (Pro only)
-# ════════════════════════════════════════════
-with tabs[3]:
-    if plan_now != "pro":
+# ════════════════════
+# TAB 2 — Trade Log
+# ════════════════════
+with tab2:
+    if n_trades == 0:
+        st.info("No trades executed." if lang == "en" else "거래 없음.")
+    else:
+        display = df_tr[["open_ts","close_ts","entry","exit","pnl_usdt","hold_minutes","reason"]].copy()
+        display.columns = [t["col_open"], t["col_close"], t["col_entry"], t["col_exit"],
+                           t["col_pnl"], t["col_hold"], "Reason"]
+        display[t["col_result"]] = display[t["col_pnl"]].apply(
+            lambda x: "✅ WIN" if x > 0 else "❌ LOSS"
+        )
+
+        def color_row(val):
+            try:
+                return "color: #00ff88" if float(val) > 0 else "color: #ff4466" if float(val) < 0 else ""
+            except Exception:
+                return ""
+
+        styled = display.style.applymap(color_row, subset=[t["col_pnl"]])
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+# ════════════════════
+# TAB 3 — AI Analysis
+# ════════════════════
+with tab3:
+    if plan != "pro":
         st.warning(t["ai_pro_only"])
         st.markdown(
-            f'<a href="{GUMROAD_PRO}" target="_blank">'
-            f'<div style="background:#f59e0b;color:#000;text-align:center;padding:10px;'
-            f'border-radius:8px;font-size:0.9rem;cursor:pointer;max-width:200px;">{t["buy_pro"]}</div></a>',
+            f'<a href="https://sparkle488.gumroad.com" target="_blank">'
+            f'<div style="background:linear-gradient(135deg,#7c3aed,#00d4ff);color:#fff;'
+            f'text-align:center;padding:10px;border-radius:8px;font-size:0.85rem;'
+            f'font-weight:700;cursor:pointer;max-width:220px;">{t["buy_pro"]}</div></a>',
             unsafe_allow_html=True,
         )
     else:
         if st.button(t["ai_btn"]):
             with st.spinner(t["ai_loading"]):
-                # Build prompt
-                summary_text = df_summary.to_string(index=False) if df_summary is not None else "N/A"
-                trades_text  = df_trades.to_string(index=False)
+                api_key = get_deepseek_key()
+                if not api_key:
+                    st.error("DeepSeek API key not configured.")
+                else:
+                    summary = f"""
+Indicator: {ind}
+Symbol: {symbol}, TF: {tf}, Candles: {candles}
+Strategy: {strategy_text}
+Trades: {n_trades}, Wins: {wins}, Losses: {losses}, WR: {winrate}%
+Total PnL: {total_pnl:.4f} USDT
+Avg Hold: {avg_hold:.0f} min
+Max Loss: {max_loss:.4f} USDT
+Max Consec Loss: {consec}
+"""
+                    if lang == "ko":
+                        prompt = f"""다음 백테스트 결과를 분석해주세요.
 
-                if lang == "ko":
-                    prompt = f"""다음은 암호화폐 자동매매 봇의 백테스트 결과입니다.
+{summary}
 
-[요약]
-{summary_text}
-
-[거래 내역]
-{trades_text}
-
-다음을 분석해주세요:
-1. 전체 성과 요약 (쉬운 언어로)
-2. 반복되는 패턴 (진입/청산 타이밍, 보유 시간)
-3. 가장 큰 문제점 2~3가지
-4. 구체적인 개선 제안 2~3가지
+다음 항목으로 분석해주세요:
+1. **전체 성과 요약** (2~3문장, 쉬운 언어)
+2. **전략의 강점** (잘 작동한 부분)
+3. **주요 문제점** 2~3가지
+4. **구체적 개선 제안** 2~3가지 (파라미터 수치 포함)
 
 마크다운 형식으로 답변해주세요."""
-                else:
-                    prompt = f"""Here is a backtest result from a crypto trading bot.
+                    else:
+                        prompt = f"""Analyze this backtest result:
 
-[Summary]
-{summary_text}
+{summary}
 
-[Trade Log]
-{trades_text}
-
-Please analyze:
-1. Overall performance summary (plain English)
-2. Repeating patterns (entry/exit timing, hold duration)
-3. Top 2-3 issues
-4. 2-3 specific improvement suggestions
+Provide:
+1. **Performance Summary** (2-3 sentences, plain English)
+2. **Strategy Strengths** (what worked)
+3. **Key Issues** (2-3 problems)
+4. **Improvement Suggestions** (2-3 specific changes with numbers)
 
 Reply in markdown format."""
 
-                try:
-                    import requests
-                    api_key = get_ai_key()
-                    if not api_key:
-                        st.error("DeepSeek API key not configured.")
-                    else:
+                    try:
                         resp = requests.post(
                             "https://api.deepseek.com/chat/completions",
-                            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                            json={
-                                "model": "deepseek-chat",
-                                "messages": [{"role": "user", "content": prompt}],
-                                "max_tokens": 1000,
-                                "temperature": 0.3,
-                            },
+                            headers={"Authorization": f"Bearer {api_key}",
+                                     "Content-Type": "application/json"},
+                            json={"model": "deepseek-chat",
+                                  "messages": [{"role": "user", "content": prompt}],
+                                  "max_tokens": 800, "temperature": 0.3},
                             timeout=30,
                         )
-                        result = resp.json()
-                        answer = result["choices"][0]["message"]["content"]
-                        st.markdown(answer)
-                except Exception as e:
-                    st.error(f"AI error: {e}")
+                        answer = resp.json()["choices"][0]["message"]["content"]
+                        st.markdown(
+                            f'<div style="background:#0d1421;border:1px solid #7c3aed;'
+                            f'border-radius:10px;padding:20px;font-family:JetBrains Mono,monospace;'
+                            f'font-size:0.8rem;line-height:1.8;">{answer}</div>',
+                            unsafe_allow_html=True,
+                        )
+                    except Exception as e:
+                        st.error(f"AI error: {e}")
