@@ -321,21 +321,7 @@ with st.sidebar:
     else:
         candles = st.slider(t["candles"], min_value=30, max_value=200, value=100, step=10)
 
-    # Market type
-    if plan == "free":
-        st.session_state.market = "spot"
-        st.markdown(
-            '<span style="font-family:JetBrains Mono,monospace;font-size:0.75rem;color:#4a6080;">'
-            'Market: <b style="color:#00d4ff;">Spot</b> (Free fixed)</span>',
-            unsafe_allow_html=True,
-        )
-    else:
-        market_choice = st.selectbox(
-            "Market",
-            ["Spot (현물)", "Futures (선물)"],
-            index=1 if st.session_state.market == "futures" else 0,
-        )
-        st.session_state.market = "futures" if "Futures" in market_choice else "spot"
+    st.session_state.market = "spot"
 
     st.divider()
 
@@ -437,11 +423,10 @@ run_clicked = st.button(
 st.divider()
 
 # ── Backtest engine ───────────────────────────────────────────
-SPOT_URL    = "https://api.binance.us/api/v3/klines"
-FUTURES_URL = "https://fapi.binance.us/fapi/v1/klines"
+SPOT_URL = "https://api.binance.us/api/v3/klines"
 
 def fetch_binance_klines(symbol: str, interval: str, limit: int, market: str = "spot") -> pd.DataFrame:
-    url = FUTURES_URL if market == "futures" else SPOT_URL
+    url = SPOT_URL
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
