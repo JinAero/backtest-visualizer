@@ -438,7 +438,7 @@ st.divider()
 
 # ── Backtest engine ───────────────────────────────────────────
 SPOT_URL    = "https://api.binance.us/api/v3/klines"
-FUTURES_URL = "https://fapi.binance.com/fapi/v1/klines"
+FUTURES_URL = "https://fapi.binance.us/fapi/v1/klines"
 
 def fetch_binance_klines(symbol: str, interval: str, limit: int, market: str = "spot") -> pd.DataFrame:
     url = FUTURES_URL if market == "futures" else SPOT_URL
