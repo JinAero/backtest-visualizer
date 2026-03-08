@@ -343,7 +343,7 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
     else:
-        candles = st.slider(t["candles"], min_value=30, max_value=200, value=100, step=10)
+        candles = st.slider(t["candles"], min_value=30, max_value=1000, value=200, step=10)
 
     st.session_state.market = "spot"
 
