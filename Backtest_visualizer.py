@@ -113,15 +113,27 @@ TEXTS = {
 - Exit condition (e.g. "Sell when RSI rises above 70")
 - Optional: Stop loss %, Take profit %
 - Optional: Trend filter (e.g. "Only buy above 200 EMA")
+- Optional: Stoch RSI filter (e.g. "Only enter when Stoch RSI between 0.2 and 0.8")
+- Optional: Trailing stop (e.g. "Trailing stop arms at 0.5%, gap 0.3%")
+- Optional: Max hold time (e.g. "Close after 3 hours")
 
-**MACD example:**
+**MACD — Basic:**
 Buy when MACD crosses above signal. Sell when MACD crosses below signal. Stop loss 1.5%.
 
+**MACD — With filters (Jin bot style):**
+Buy when MACD crosses above signal AND histogram > 5 AND MACD slope > 0.3, Stoch RSI between 0.2 and 0.8. Trailing stop arms at 0.5%, gap 0.3%. Max hold 3 hours. Stop loss 1.5%.
+
+**MACD — With histogram direction filter:**
+Buy when MACD crosses above signal AND histogram is increasing. Sell when MACD crosses below signal. Stop loss 1.5%.
+
 **RSI example:**
-Buy when RSI < 30 (oversold). Sell when RSI > 70 (overbought). Stop loss 2%.
+Buy when RSI < 30. Sell when RSI > 70. Stop loss 2%. Take profit 4%.
 
 **BB example:**
 Buy when price touches lower Bollinger Band. Sell at middle band. Stop loss 1%.
+
+**With trailing stop:**
+Buy when MACD crosses above signal. Sell on MACD cross. Trailing stop arms at 0.3%, gap 0.25%. Stop loss 1.5%.
 """,
         "run_btn": "▶ RUN BACKTEST",
         "enter_code": "🔑 Enter Subscription Code",
@@ -187,15 +199,27 @@ Buy when price touches lower Bollinger Band. Sell at middle band. Stop loss 1%.
 - 청산 조건 (예: "RSI가 70 위로 올라가면 매도")
 - 선택: 손절 %, 익절 %
 - 선택: 추세 필터 (예: "200 EMA 위에서만 매수")
+- 선택: Stoch RSI 필터 (예: "Stoch RSI 0.2~0.8 구간에서만 진입")
+- 선택: 트레일링 스탑 (예: "트레일링 스탑 0.5% 발동, 간격 0.3%")
+- 선택: 최대 보유 시간 (예: "3시간 후 강제 청산")
 
-**MACD 예시:**
+**MACD — 기본:**
 MACD가 시그널을 상향 돌파하면 매수. 하향 돌파하면 매도. 손절 1.5%.
 
+**MACD — 복합 필터 (Jin 봇 스타일):**
+MACD 상향 돌파하고 히스토그램 5 초과, MACD 기울기 0.3 초과, Stoch RSI 0.2~0.8 구간. 트레일링 스탑 0.5% 발동, 간격 0.3%. 최대 보유 3시간. 손절 1.5%.
+
+**MACD — 히스토그램 방향 필터:**
+MACD 상향 돌파하고 히스토그램 상승 중(histogram turning up). 하향 돌파하면 매도. 손절 1.5%.
+
 **RSI 예시:**
-RSI 30 미만(과매도)이면 매수. RSI 70 초과(과매수)이면 매도. 손절 2%.
+RSI 30 미만이면 매수. RSI 70 초과이면 매도. 손절 2%. 익절 4%.
 
 **볼린저 밴드 예시:**
 가격이 하단 밴드에 터치하면 매수. 중간 밴드에서 매도. 손절 1%.
+
+**트레일링 스탑 예시:**
+MACD 상향 돌파하면 매수. 하향 돌파하면 매도. 트레일링 스탑 0.3% 발동, 간격 0.25%. 손절 1.5%.
 """,
         "run_btn": "▶ 백테스트 실행",
         "enter_code": "🔑 구독 코드 입력",
@@ -319,7 +343,7 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
     else:
-        candles = st.slider(t["candles"], min_value=30, max_value=1000, value=200, step=10)
+        candles = st.slider(t["candles"], min_value=30, max_value=200, value=100, step=10)
 
     st.session_state.market = "spot"
 
@@ -486,6 +510,22 @@ def calc_bb(df: pd.DataFrame, period=20, std=2):
     return df
 
 
+def calc_stoch_rsi(df: pd.DataFrame, rsi_period=14, stoch_period=14, k_period=3, d_period=3):
+    """Stoch RSI(14,14,3,3) — K값 0~1 스케일로 반환 (Jin 봇 srk 컬럼과 동일)"""
+    df = df.copy()
+    delta = df["close"].diff()
+    gain  = delta.clip(lower=0).ewm(alpha=1/rsi_period, adjust=False).mean()
+    loss  = (-delta.clip(upper=0)).ewm(alpha=1/rsi_period, adjust=False).mean()
+    rs    = gain / (loss + 1e-10)
+    rsi   = 100 - (100 / (1 + rs))
+    sr_min = rsi.rolling(stoch_period).min()
+    sr_max = rsi.rolling(stoch_period).max()
+    sr    = (rsi - sr_min) / (sr_max - sr_min + 1e-10)
+    df["srk"] = sr.rolling(k_period).mean()   # %K
+    df["srd"] = df["srk"].rolling(d_period).mean()  # %D
+    return df
+
+
 def parse_strategy_with_ai(strategy_text: str, indicator: str, lang: str) -> dict:
     """DeepSeek으로 전략 텍스트 → Python 파라미터 변환"""
     api_key = get_deepseek_key()
@@ -506,12 +546,21 @@ Return ONLY a JSON object with these fields:
 - use_ema_filter: bool (true if EMA/MA trend filter mentioned, default false)
 - ema_period: int (EMA period, default 200)
 - macd_hist_min: float (MACD histogram abs minimum for entry, default 0. e.g. "histogram > 10" -> 10.0)
+- macd_slope_min: float (MACD line slope minimum for entry, default 0. e.g. "MACD slope > 0.5" or "MACD momentum > 0.3" -> 0.5. slope = current MACD - previous MACD)
+- macd_hist_slope: bool (true if entry requires histogram slope turning positive, default false. e.g. "histogram increasing" or "histogram turning up")
 - bb_exit_at_mid: bool (BB exit at middle band=true, upper band=false, default true)
+- stoch_rsi_min: float (Stoch RSI K min for entry, 0~1 scale, default 0. e.g. "Stoch RSI above 0.3" -> 0.3, "oversold stoch" -> 0.2)
+- stoch_rsi_max: float (Stoch RSI K max for entry, 0~1 scale, default 1. e.g. "Stoch RSI below 0.8" -> 0.8, "overbought block" -> 0.8)
+- trail_arm_pct: float (trailing stop arm threshold %, default 0=disabled. e.g. "trailing stop arms at 0.3%" -> 0.3)
+- trail_gap_pct: float (trailing stop gap %, default 0.25. e.g. "trailing gap 0.5%" -> 0.5)
+- max_hold_min: int (max holding time in minutes, default 0=disabled. e.g. "close after 3 hours" -> 180, "max hold 2h" -> 120)
 
 Examples:
-- "MACD crosses above signal AND histogram absolute value > 10, stop loss 1.5%" -> {{"stop_loss_pct":1.5,"macd_hist_min":10.0,"use_ema_filter":false,"ema_period":200,"take_profit_pct":0}}
+- "MACD crosses above signal AND histogram absolute value > 10, stop loss 1.5%" -> {{"stop_loss_pct":1.5,"macd_hist_min":10.0,"macd_slope_min":0,"use_ema_filter":false,"ema_period":200,"take_profit_pct":0}}
+- "MACD crosses above signal, slope > 0.5, histogram > 5, stop loss 2%" -> {{"stop_loss_pct":2.0,"macd_slope_min":0.5,"macd_hist_min":5.0,"take_profit_pct":0,"use_ema_filter":false}}
 - "RSI below 25 buy, above 75 sell, stop loss 2%, take profit 4%" -> {{"stop_loss_pct":2.0,"take_profit_pct":4.0,"rsi_oversold":25,"rsi_overbought":75,"use_ema_filter":false}}
 - "Buy at lower BB, sell at middle band, only above 200 EMA" -> {{"stop_loss_pct":1.5,"take_profit_pct":0,"bb_exit_at_mid":true,"use_ema_filter":true,"ema_period":200}}
+- "MACD cross, Stoch RSI above 0.3, trailing stop arm 0.5%, gap 0.3%, max hold 3h" -> {{"stop_loss_pct":1.5,"macd_hist_min":0,"stoch_rsi_min":0.3,"stoch_rsi_max":1,"trail_arm_pct":0.5,"trail_gap_pct":0.3,"max_hold_min":180}}
 
 Return ONLY the JSON, no explanation, no markdown."""
 
@@ -538,7 +587,7 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict,
                  initial_equity=1000.0, fee_pct=0.0004) -> dict:
     df = df.copy().reset_index(drop=True)
 
-    # Calculate indicators
+    # ── 지표 계산 ──
     if indicator == "MACD":
         df = calc_macd(df)
     elif indicator == "RSI":
@@ -546,7 +595,10 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict,
     elif indicator == "Bollinger Bands":
         df = calc_bb(df)
 
-    # EMA filter
+    # A1: Stoch RSI — 항상 계산 (필터 사용 여부와 무관)
+    df = calc_stoch_rsi(df)
+
+    # EMA 추세 필터
     if params.get("use_ema_filter"):
         ema_p = int(params.get("ema_period", 200))
         df["ema_filter"] = df["close"].ewm(span=ema_p).mean()
@@ -554,26 +606,48 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict,
     sl_pct = float(params.get("stop_loss_pct", 1.5)) / 100
     tp_pct = float(params.get("take_profit_pct", 0))  / 100
 
-    trades = []
-    equity = initial_equity
-    position = None  # {"entry_price", "entry_idx", "entry_time", "qty"}
-    qty_usdt = equity * 0.1  # 10% position size
+    # A1: Stoch RSI 진입 필터 파라미터
+    srk_min = float(params.get("stoch_rsi_min", 0))    # 0 = 비활성
+    srk_max = float(params.get("stoch_rsi_max", 1))    # 1 = 비활성
 
-    for i in range(1, len(df)):
-        price  = df.loc[i, "close"]
-        ts     = df.loc[i, "open_time"]
+    # B1: 트레일링 스탑 파라미터 (Jin 봇 TRAIL_PARAMS와 동일 구조)
+    trail_arm = float(params.get("trail_arm_pct", 0))  / 100  # 0 = 비활성
+    trail_gap = float(params.get("trail_gap_pct", 0.25)) / 100
 
-        # ── Entry logic ──
+    # B3: 최대 보유 시간
+    max_hold_min = int(params.get("max_hold_min", 0))  # 0 = 비활성
+
+    trades   = []
+    equity   = initial_equity
+    position = None   # {"entry_price","entry_idx","entry_time","qty","trail_hfp","trail_stop","trail_armed"}
+    qty_usdt = equity * 0.1
+
+    for i in range(2, len(df)):
+        price = df.loc[i, "close"]
+        ts    = df.loc[i, "open_time"]
+
+        # ── Entry ──────────────────────────────────────────────
         if position is None:
             entry_signal = False
 
             if indicator == "MACD":
-                if i >= 1:
-                    prev_diff = df.loc[i-1, "macd"] - df.loc[i-1, "signal"]
-                    curr_diff = df.loc[i,   "macd"] - df.loc[i,   "signal"]
-                    hist_abs  = abs(df.loc[i, "hist"]) if "hist" in df.columns else 999
-                    hist_min  = float(params.get("macd_hist_min", 0))
-                    entry_signal = (prev_diff < 0 and curr_diff >= 0 and hist_abs > hist_min)
+                prev_diff  = df.loc[i-1, "macd"] - df.loc[i-1, "signal"]
+                curr_diff  = df.loc[i,   "macd"] - df.loc[i,   "signal"]
+                hist_abs   = abs(df.loc[i, "hist"]) if "hist" in df.columns else 999
+                hist_min   = float(params.get("macd_hist_min", 0))
+                macd_slope = df.loc[i, "macd"] - df.loc[i-1, "macd"]
+                slope_min  = float(params.get("macd_slope_min", 0))
+                hist_slope_ok = True
+                if params.get("macd_hist_slope", False):
+                    prev_hist = df.loc[i-1, "hist"] if "hist" in df.columns else 0
+                    curr_hist = df.loc[i,   "hist"] if "hist" in df.columns else 0
+                    hist_slope_ok = (prev_hist < curr_hist)
+                entry_signal = (
+                    prev_diff < 0 and curr_diff >= 0
+                    and hist_abs > hist_min
+                    and macd_slope > slope_min
+                    and hist_slope_ok
+                )
 
             elif indicator == "RSI":
                 rsi_val = df.loc[i, "rsi"] if "rsi" in df.columns else 50
@@ -583,20 +657,30 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict,
                 if "bb_lower" in df.columns:
                     entry_signal = (price <= df.loc[i, "bb_lower"])
 
-            # EMA filter
+            # EMA 추세 필터
             if params.get("use_ema_filter") and "ema_filter" in df.columns:
                 entry_signal = entry_signal and (price > df.loc[i, "ema_filter"])
+
+            # A1: Stoch RSI 필터 (srk_min > 0 또는 srk_max < 1 일 때만 적용)
+            if entry_signal and (srk_min > 0 or srk_max < 1):
+                srk_val = df.loc[i, "srk"] if "srk" in df.columns else 0.5
+                if not (srk_min <= srk_val <= srk_max):
+                    entry_signal = False
 
             if entry_signal:
                 qty = qty_usdt / price
                 position = {
-                    "entry_price": price,
-                    "entry_idx":   i,
-                    "entry_time":  ts,
-                    "qty":         qty,
+                    "entry_price":  price,
+                    "entry_idx":    i,
+                    "entry_time":   ts,
+                    "qty":          qty,
+                    # B1 트레일링 스탑 상태
+                    "trail_hfp":    price,   # highest favorable price
+                    "trail_stop":   0.0,
+                    "trail_armed":  False,
                 }
 
-        # ── Exit logic ──
+        # ── Exit ───────────────────────────────────────────────
         elif position is not None:
             entry_price = position["entry_price"]
             qty         = position["qty"]
@@ -604,22 +688,44 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict,
             exit_signal = False
             exit_reason = ""
 
-            # Stop loss
-            if sl_pct > 0 and pct_change <= -sl_pct:
+            # B1: 트레일링 스탑 업데이트 (arm_pct 설정 시만)
+            if trail_arm > 0:
+                hfp = max(position["trail_hfp"], price)
+                position["trail_hfp"] = hfp
+                gain_pct = (hfp - entry_price) / entry_price
+                if gain_pct >= trail_arm:
+                    position["trail_armed"] = True
+                if position["trail_armed"]:
+                    new_stop = hfp * (1 - trail_gap)
+                    if position["trail_stop"] == 0.0 or new_stop > position["trail_stop"]:
+                        position["trail_stop"] = new_stop
+                if position["trail_armed"] and position["trail_stop"] > 0 and price <= position["trail_stop"]:
+                    exit_signal = True
+                    exit_reason = "TRAIL"
+
+            # Stop loss (트레일링 미작동 시)
+            if not exit_signal and sl_pct > 0 and pct_change <= -sl_pct:
                 exit_signal = True
                 exit_reason = "SL"
 
             # Take profit
-            elif tp_pct > 0 and pct_change >= tp_pct:
+            if not exit_signal and tp_pct > 0 and pct_change >= tp_pct:
                 exit_signal = True
                 exit_reason = "TP"
 
-            # Indicator exit
-            else:
+            # B3: 최대 보유 시간 초과
+            if not exit_signal and max_hold_min > 0:
+                held_min = (ts - position["entry_time"]).total_seconds() / 60
+                if held_min >= max_hold_min:
+                    exit_signal = True
+                    exit_reason = "MAX_HOLD"
+
+            # 지표 청산 신호
+            if not exit_signal:
                 if indicator == "MACD":
                     prev_diff = df.loc[i-1, "macd"] - df.loc[i-1, "signal"]
                     curr_diff = df.loc[i,   "macd"] - df.loc[i,   "signal"]
-                    if prev_diff >= 0 and curr_diff < 0:  # bearish cross
+                    if prev_diff >= 0 and curr_diff < 0:
                         exit_signal = True
                         exit_reason = "SIGNAL"
 
@@ -630,12 +736,13 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict,
                         exit_reason = "SIGNAL"
 
                 elif indicator == "Bollinger Bands":
-                    if "bb_mid" in df.columns and price >= df.loc[i, "bb_mid"]:
+                    exit_col = "bb_mid" if params.get("bb_exit_at_mid", True) else "bb_upper"
+                    if exit_col in df.columns and price >= df.loc[i, exit_col]:
                         exit_signal = True
                         exit_reason = "SIGNAL"
 
             if exit_signal:
-                fee   = (entry_price + price) * qty * fee_pct  # 진입+청산 수수료
+                fee   = (entry_price + price) * qty * fee_pct
                 pnl   = (price - entry_price) * qty - fee
                 hold  = int((ts - position["entry_time"]).total_seconds() / 60)
                 equity += pnl
@@ -653,9 +760,9 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict,
                     "exit_idx":     i,
                 })
                 position = None
-                qty_usdt = equity * 0.1  # rebalance
+                qty_usdt = equity * 0.1
 
-    # Force close last position
+    # Force close
     if position is not None:
         last_price = df.iloc[-1]["close"]
         fee  = (position["entry_price"] + last_price) * position["qty"] * fee_pct
@@ -685,6 +792,7 @@ def run_backtest(df: pd.DataFrame, indicator: str, params: dict,
         "final_eq":   round(equity, 4),
         "indicator":  indicator,
     }
+
 
 
 # ── Run backtest ──────────────────────────────────────────────
